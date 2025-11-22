@@ -32,10 +32,7 @@ const model = new ChatOpenAI({
 
 const dalle = new DallEAPIWrapper({
   apiKey: process.env.OPENAI_API_KEY || 'sk-proj-',
-  model: process.env.OPENAI_IMAGE_MODEL || 'dall-e-3',
-  configuration: {
-    baseURL: process.env.OPENAI_BASE_URL || undefined,
-  },
+  model: process.env.OPENAI_IMAGE_MODEL || 'google/gemini-3-pro-image-preview',
 });
 
 interface WorkflowChannelsState {
@@ -326,23 +323,11 @@ export class AgentGraphService {
 
     const newContent = await Promise.all(
       (state.content || []).map(async (p) => {
-
-        const apiResponse = await model.chat.completions.create({
-          model: process.env.OPENAI_IMAGE_MODEL || 'google/gemini-3-pro-image-preview',
-          messages: [
-            {
-              role: 'user',
-              content: prompt,
-            },
-          ],
-          modalities: ['image', 'text'],
-        });
-  
-        const response = apiResponse.choices[0].message;
-        if (!response?.images  || !response?.images?.length) {
-          throw new Error('No image generated');
+        if (!p.prompt) {
+          return p;
         }
-        const image = response.images[0].image_url.url; // Base64 data URL
+
+        const image = await dalle.invoke(p.prompt);
         
         return {
           ...p,

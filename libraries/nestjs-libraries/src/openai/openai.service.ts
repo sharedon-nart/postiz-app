@@ -20,24 +20,24 @@ const VoicePrompt = z.object({
 @Injectable()
 export class OpenaiService {
   async generateImage(prompt: string, isUrl: boolean, isVertical = false) {
-      const apiResponse = await openai.chat.completions.create({
+      const apiResponse = await openai.images.generate({
         model: process.env.OPENAI_IMAGE_MODEL || 'google/gemini-3-pro-image-preview',
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        modalities: ['image', 'text'],
+        prompt: prompt,
+        n: 1,
+        size: isVertical ? '1024x1792' : '1792x1024',
+        response_format: isUrl ? 'url' : 'b64_json',
       });
 
-      const response = apiResponse.choices[0].message;
-      if (!response?.images  || !response?.images?.length) {
+      const imageData = apiResponse.data[0];
+      if (!imageData) {
         throw new Error('No image generated');
       }
-      const imageUrl = response.images[0].image_url.url; // Base64 data URL
-      return isUrl ? imageUrl : imageUrl.split(',')[1]; // Return base64 without prefix if needed
-   
+      
+      if (isUrl) {
+        return imageData.url || '';
+      }
+      
+      return imageData.b64_json || '';
   }
 
   async generatePromptForPicture(prompt: string) {
