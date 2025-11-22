@@ -237,7 +237,7 @@ export class AutopostService {
     const { generatedTextToBeSentToDallE } =
       await ChatPromptTemplate.fromTemplate(
         `
-        You are an assistant that gets description and generate a prompt that will be sent to DallE to generate pictures.
+        You are an assistant that gets description and generate a prompt that will be sent to generate pictures.
         
         content:
         {content}
@@ -248,7 +248,23 @@ export class AutopostService {
           content: state.load.description || state.description,
         });
 
-    const image = await dalle.invoke(generatedTextToBeSentToDallE);
+    
+        const apiResponse = await model.chat.completions.create({
+          model: process.env.OPENAI_IMAGE_MODEL || 'google/gemini-3-pro-image-preview',
+          messages: [
+            {
+              role: 'user',
+              content: prompt,
+            },
+          ],
+          modalities: ['image', 'text'],
+        });
+  
+        const response = apiResponse.choices[0].message;
+        if (!response?.images  || !response?.images?.length) {
+          throw new Error('No image generated');
+        }
+        const image = response.images[0].image_url.url; // Base64 data URL
 
     return { ...state, image };
   }
