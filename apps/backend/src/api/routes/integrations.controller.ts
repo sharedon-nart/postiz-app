@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   HttpException,
+  Logger,
   Param,
   Post,
   Put,
@@ -45,8 +46,11 @@ export class IntegrationsController {
   constructor(
     private _integrationManager: IntegrationManager,
     private _integrationService: IntegrationService,
-    private _postService: PostsService
-  ) {}
+    private _postService: PostsService,
+    private readonly logger: Logger
+  ) {
+    this.logger.setContext(IntegrationsController.name);
+  }
   @Get('/')
   getIntegration() {
     return this._integrationManager.getAllIntegrations();
@@ -195,11 +199,16 @@ export class IntegrationsController {
     @Query('refresh') refresh: string,
     @Query('externalUrl') externalUrl: string
   ) {
+    this.logger.log(`Requesting social integration URL: ${integration}`);
+    this.logger.debug(`Parameters: refresh=${refresh}, externalUrl=${externalUrl}`);
+
     if (
       !this._integrationManager
         .getAllowedSocialsIntegrations()
         .includes(integration)
     ) {
+      this.logger.error(`Integration not allowed: ${integration}`);
+      this.logger.debug(`Allowed integrations: ${this._integrationManager.getAllowedSocialsIntegrations().join(', ')}`);
       throw new Error('Integration not allowed');
     }
 
@@ -207,10 +216,12 @@ export class IntegrationsController {
       this._integrationManager.getSocialIntegration(integration);
 
     if (integrationProvider.externalUrl && !externalUrl) {
+      this.logger.error(`Missing external URL for integration: ${integration}`);
       throw new Error('Missing external url');
     }
 
     try {
+      this.logger.debug(`Getting external URL for: ${integration}`);
       const getExternalUrl = integrationProvider.externalUrl
         ? {
             ...(await integrationProvider.externalUrl(externalUrl)),
@@ -218,11 +229,15 @@ export class IntegrationsController {
           }
         : undefined;
 
+      this.logger.debug(`Generating auth URL for: ${integration}`);
       const { codeVerifier, state, url } =
         await integrationProvider.generateAuthUrl(getExternalUrl);
 
+      this.logger.debug(`Generated state: ${state}`);
+
       if (refresh) {
         await ioRedis.set(`refresh:${state}`, refresh, 'EX', 300);
+        this.logger.debug(`Stored refresh token with state: ${state}`);
       }
 
       await ioRedis.set(`login:${state}`, codeVerifier, 'EX', 300);
@@ -233,9 +248,13 @@ export class IntegrationsController {
         300
       );
 
+      this.logger.log(`Successfully generated auth URL for ${integration}`);
       return { url };
     } catch (err) {
-      return { err: true };
+      this.logger.error(`Error generating integration URL for ${integration}:`, err);
+      this.logger.error(`Error stack: ${err.stack}`);
+      this.logger.error(`Error message: ${err.message}`);
+      return { err: true, message: err.message };
     }
   }
 
@@ -253,11 +272,14 @@ export class IntegrationsController {
     @GetOrgFromRequest() org: Organization,
     @Body() body: IntegrationFunctionDto
   ) {
+    this.logger.debug(`Fetching mentions for integration: ${body.id}`);
+
     const getIntegration = await this._integrationService.getIntegrationById(
       org.id,
       body.id
     );
     if (!getIntegration) {
+      this.logger.error(`Invalid integration ID: ${body.id} for org: ${org.id}`);
       throw new Error('Invalid integration');
     }
 
@@ -265,7 +287,8 @@ export class IntegrationsController {
     try {
       newList = (await this.functionIntegration(org, body)) || [];
     } catch (err) {
-      console.log(err);
+      this.logger.error(`Error fetching mentions for integration ${body.id}:`, err);
+      this.logger.error(`Error stack: ${err.stack}`);
     }
 
     if (!Array.isArray(newList) && newList?.none) {
@@ -309,11 +332,14 @@ export class IntegrationsController {
     @GetOrgFromRequest() org: Organization,
     @Body() body: IntegrationFunctionDto
   ): Promise<any> {
+    this.logger.debug(`Executing function ${body.name} for integration ${body.id}`);
+
     const getIntegration = await this._integrationService.getIntegrationById(
       org.id,
       body.id
     );
     if (!getIntegration) {
+      this.logger.error(`Invalid integration ID: ${body.id} for org: ${org.id}`);
       throw new Error('Invalid integration');
     }
 
@@ -321,12 +347,14 @@ export class IntegrationsController {
       getIntegration.providerIdentifier
     );
     if (!integrationProvider) {
+      this.logger.error(`Invalid provider: ${getIntegration.providerIdentifier}`);
       throw new Error('Invalid provider');
     }
 
     // @ts-ignore
     if (integrationProvider[body.name]) {
       try {
+        this.logger.debug(`Calling provider function: ${body.name} on ${getIntegration.providerIdentifier}`);
         // @ts-ignore
         const load = await integrationProvider[body.name](
           getIntegration.token,
@@ -338,10 +366,12 @@ export class IntegrationsController {
         return load;
       } catch (err) {
         if (err instanceof RefreshToken) {
+          this.logger.warn(`Token refresh required for integration ${body.id}`);
           const { accessToken, refreshToken, expiresIn, additionalSettings } =
             await integrationProvider.refreshToken(getIntegration.refreshToken);
 
           if (accessToken) {
+            this.logger.log(`Token refreshed successfully for integration ${body.id}`);
             await this._integrationService.createOrUpdateIntegration(
               additionalSettings,
               !!integrationProvider.oneTimeToken,
@@ -363,6 +393,7 @@ export class IntegrationsController {
             }
             return this.functionIntegration(org, body);
           } else {
+            this.logger.error(`Token refresh failed for integration ${body.id}, disconnecting channel`);
             await this._integrationService.disconnectChannel(
               org.id,
               getIntegration
@@ -371,6 +402,9 @@ export class IntegrationsController {
           }
         }
 
+        this.logger.error(`Error executing function ${body.name} for integration ${body.id}:`, err);
+        this.logger.error(`Error stack: ${err.stack}`);
+        this.logger.error(`Error message: ${err.message}`);
         return false;
       }
     }
@@ -385,23 +419,33 @@ export class IntegrationsController {
     @Param('integration') integration: string,
     @Body() body: ConnectIntegrationDto
   ) {
+    this.logger.log(`Connecting social integration: ${integration} for org: ${org.id}`);
+    this.logger.debug(`Connection body: ${JSON.stringify({ state: body.state, refresh: body.refresh, timezone: body.timezone })}`);
+
     if (
       !this._integrationManager
         .getAllowedSocialsIntegrations()
         .includes(integration)
     ) {
+      this.logger.error(`Integration not allowed: ${integration}`);
       throw new Error('Integration not allowed');
     }
 
     const integrationProvider =
       this._integrationManager.getSocialIntegration(integration);
 
+    this.logger.debug(`Integration provider found: ${integrationProvider.identifier}`);
+
     const getCodeVerifier = integrationProvider.customFields
       ? 'none'
       : await ioRedis.get(`login:${body.state}`);
     if (!getCodeVerifier) {
+      this.logger.error(`Invalid state: ${body.state} - code verifier not found in Redis`);
       throw new Error('Invalid state');
     }
+
+    this.logger.debug(`Code verifier retrieved: ${getCodeVerifier === 'none' ? 'custom fields' : 'from Redis'}`);
+  
 
     if (!integrationProvider.customFields) {
       await ioRedis.del(`login:${body.state}`);
@@ -420,6 +464,8 @@ export class IntegrationsController {
       await ioRedis.del(`refresh:${body.state}`);
     }
 
+    this.logger.debug(`Starting authentication for ${integration}`);
+
     const {
       error,
       accessToken,
@@ -432,18 +478,48 @@ export class IntegrationsController {
       additionalSettings,
       // eslint-disable-next-line no-async-promise-executor
     } = await new Promise<AuthTokenDetails>(async (res) => {
-      const auth = await integrationProvider.authenticate(
-        {
-          code: body.code,
-          codeVerifier: getCodeVerifier,
-          refresh: body.refresh,
-        },
-        details ? JSON.parse(details) : undefined
-      );
+      try {
+        this.logger.debug(`Calling authenticate() for ${integration}`);
+        const auth = await integrationProvider.authenticate(
+          {
+            code: body.code,
+            codeVerifier: getCodeVerifier,
+            refresh: body.refresh,
+          },
+          details ? JSON.parse(details) : undefined
+        );
 
-      if (typeof auth === 'string') {
+        if (typeof auth === 'string') {
+          this.logger.error(`Authentication failed for ${integration}: ${auth}`);
+          return res({
+            error: auth,
+            accessToken: '',
+            id: '',
+            name: '',
+            picture: '',
+            username: '',
+            additionalSettings: [],
+          });
+        }
+
+        this.logger.debug(`Authentication successful for ${integration}, id: ${auth.id}`);
+
+        if (refresh && integrationProvider.reConnect) {
+          this.logger.debug(`Reconnecting existing integration: ${auth.id}`);
+          const newAuth = await integrationProvider.reConnect(
+            auth.id,
+            refresh,
+            auth.accessToken
+          );
+          return res(newAuth);
+        }
+
+        return res(auth);
+      } catch (err) {
+        this.logger.error(`Exception during authentication for ${integration}:`, err);
+        this.logger.error(`Error stack: ${err.stack}`);
         return res({
-          error: auth,
+          error: err.message || 'Authentication failed',
           accessToken: '',
           id: '',
           name: '',
@@ -452,28 +528,22 @@ export class IntegrationsController {
           additionalSettings: [],
         });
       }
-
-      if (refresh && integrationProvider.reConnect) {
-        const newAuth = await integrationProvider.reConnect(
-          auth.id,
-          refresh,
-          auth.accessToken
-        );
-        return res(newAuth);
-      }
-
-      return res(auth);
     });
 
     if (error) {
+      this.logger.error(`Authentication error for ${integration}: ${error}`);
       throw new NotEnoughScopes(error);
     }
 
     if (!id) {
+      this.logger.error(`No ID returned from ${integration} authentication`);
       throw new NotEnoughScopes('Invalid API key');
     }
 
+    this.logger.debug(`Integration authenticated successfully - ID: ${id}, Name: ${name}, Username: ${username}`);
+
     if (refresh && String(id) !== String(refresh)) {
+      this.logger.error(`ID mismatch during refresh. Expected: ${refresh}, Got: ${id}`);
       throw new NotEnoughScopes(
         'Please refresh the channel that needs to be refreshed'
       );
@@ -486,6 +556,7 @@ export class IntegrationsController {
       } else {
         validName = `Channel_${String(id).slice(0, 8)}`;
       }
+      this.logger.debug(`Generated valid name from username/id: ${validName}`);
     }
 
     if (
@@ -496,8 +567,11 @@ export class IntegrationsController {
         String(id)
       ))
     ) {
+      this.logger.warn(`Previous connection detected for org ${org.id}, channel ${id} during trial`);
       throw new HttpException('', 412);
     }
+
+    this.logger.log(`Creating/updating integration for ${integration}, id: ${id}, name: ${validName}`);
 
     return this._integrationService.createOrUpdateIntegration(
       additionalSettings,

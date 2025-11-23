@@ -1,4 +1,4 @@
-import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+import { Logger, MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { AuthController } from '@gitroom/backend/api/routes/auth.controller';
 import { AuthService } from '@gitroom/backend/services/auth/auth.service';
 import { UsersController } from '@gitroom/backend/api/routes/users.controller';
@@ -65,6 +65,7 @@ const authenticatedController = [
     ...authenticatedController,
   ],
   providers: [
+    Logger,
     AuthService,
     StripeService,
     OpenaiService,
