@@ -48,9 +48,7 @@ export class IntegrationsController {
     private _integrationService: IntegrationService,
     private _postService: PostsService,
     private readonly logger: Logger
-  ) {
-    this.logger.setContext(IntegrationsController.name);
-  }
+  ) {}
   @Get('/')
   getIntegration() {
     return this._integrationManager.getAllIntegrations();
@@ -251,10 +249,9 @@ export class IntegrationsController {
       this.logger.log(`Successfully generated auth URL for ${integration}`);
       return { url };
     } catch (err) {
-      this.logger.error(`Error generating integration URL for ${integration}:`, err);
-      this.logger.error(`Error stack: ${err.stack}`);
-      this.logger.error(`Error message: ${err.message}`);
-      return { err: true, message: err.message };
+      const error = err as Error;
+      this.logger.error(`Error generating integration URL for ${integration}:`, error.stack);
+      return { err: true, message: error.message };
     }
   }
 
@@ -287,8 +284,8 @@ export class IntegrationsController {
     try {
       newList = (await this.functionIntegration(org, body)) || [];
     } catch (err) {
-      this.logger.error(`Error fetching mentions for integration ${body.id}:`, err);
-      this.logger.error(`Error stack: ${err.stack}`);
+      const error = err as Error;
+      this.logger.error(`Error fetching mentions for integration ${body.id}:`, error.stack);
     }
 
     if (!Array.isArray(newList) && newList?.none) {
@@ -402,9 +399,8 @@ export class IntegrationsController {
           }
         }
 
-        this.logger.error(`Error executing function ${body.name} for integration ${body.id}:`, err);
-        this.logger.error(`Error stack: ${err.stack}`);
-        this.logger.error(`Error message: ${err.message}`);
+        const error = err as Error;
+        this.logger.error(`Error executing function ${body.name} for integration ${body.id}:`, error.stack);
         return false;
       }
     }
@@ -516,10 +512,10 @@ export class IntegrationsController {
 
         return res(auth);
       } catch (err) {
-        this.logger.error(`Exception during authentication for ${integration}:`, err);
-        this.logger.error(`Error stack: ${err.stack}`);
+        const error = err as Error;
+        this.logger.error(`Exception during authentication for ${integration}:`, error.stack);
         return res({
-          error: err.message || 'Authentication failed',
+          error: error.message || 'Authentication failed',
           accessToken: '',
           id: '',
           name: '',
